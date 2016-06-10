@@ -30,19 +30,30 @@ int Div0Up(int a, int b)//fix int/int=0
 {
 	return ((a % b) != 0) ? (1) : (a / b);
 }
+/*
+__device__ void channelcalc(double *sum, int p, int nl, const double *tdr, const double *raw_data)
+{
+	int Ntdr = tdr[threadIdx.x + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
+	if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
+	{
+		*sum += raw_data[Ntdr + (threadIdx.x * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
+	}
+}
+*/
 
 __global__ void beamforming1scanline(int nl, double *vout, const double *tdr, const double *raw_data)
 {
-	const int numThreads = blockDim.x * gridDim.x;
-	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	const int nThd = blockDim.x * gridDim.x;
+	const int tID = blockIdx.x * blockDim.x + threadIdx.x;
 	double sum;
 	int Ntdr = 0;
-	for (int p = threadID; p < SIGNAL_SIZE; p += numThreads)//1 scanline 8192 point
+	for (int p = tID; p < SIGNAL_SIZE; p += nThd)//1 scanline 8192 point
 	{
 		sum = 0;
 		//printf("W = %d H = %d\n", nl,threadID);
 		for (int i = 0; i < CHANNEL; i++)//1 point = 32 channel
 		{
+			//channelcalc << <1, 32 >> >(sum, p, nl, tdr, raw_data); // my computer not suppport (compute capability > 3.5)
 			Ntdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
 			//printf("%d ", Ntdr);
 			if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
@@ -66,7 +77,7 @@ void delaysum_beamforming(double *output, const double *tdr, const double *raw_s
 			sum = 0;
 			for (int i = 0; i < CHANNEL; i++)//1 point = 32 channel
 			{
-				Ntdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
+				Ntdr = int( tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)] );
 				if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
 				{
 					sum += raw_signal[Ntdr + (i * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
@@ -82,7 +93,7 @@ int main()
 	int    dataLength	= SIGNAL_SIZE * SCAN_LINE; // 663552
 	int	   Fullsize     = dataLength * CHANNEL *sizeof(double);
 	int    Imgsize      = dataLength * sizeof(double);
-	int    ChannelPsize = dataLength * CHANNEL * sizeof(double);
+	//int    ChannelPsize = dataLength * CHANNEL * sizeof(double);
 	int	   *tdfindex	= new int   [CHANNEL * SIGNAL_SIZE];
 	double *t0			= new double[SCAN_LINE];
 	double *max_ps_delay= new double[SCAN_LINE];
@@ -102,9 +113,7 @@ int main()
 	loadData("D:\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadElementRxs("D:\\loadElementRxs.dat", elementRxs); // channel*scanline size
 	for (int i = 0; i < SCAN_LINE; i++) 
-	{ 
 		t0[i] = NBEFOREPULSE + (max_ps_delay[i] / FREQ_FPGA_CLOCK * FREQ_SAMPLING); 
-	}
 	calc_TimeDelay(tdf, tdmin, NTX * 2, PITCH, SOUND_SPEED, FREQ_SAMPLING); // TDF
 	calc_tdds(tdds, NRX * 2, tdf, tdmin, FREQ_SAMPLING); //TDDS	
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
@@ -124,17 +133,17 @@ int main()
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
-	float milliseconds = 0 ,sm = 0;
+	float mi = 0 ,sm = 0;
 	
 	for (int nl = 0; nl < SCAN_LINE; nl++){
 		cudaEventRecord(start);
-		beamforming1scanline << < 16, 512 >> >(nl, d_vout, d_tdr, d_raw_signal);
+		beamforming1scanline << < 32, 256 >> >(nl, d_vout, d_tdr, d_raw_signal);
 		cudaEventRecord(stop);
 		cudaEventSynchronize(stop);
-		cudaEventElapsedTime(&milliseconds, start, stop);
-		sm += milliseconds;
+		cudaEventElapsedTime(&mi, start, stop);
+		sm += mi;
 	}
-	printf("%f ",sm);
+	printf("Gpu beamfrom times = %f ms\n",sm);
 	cudaMemcpy(vout, d_vout, Imgsize, cudaMemcpyDeviceToHost);
 	writeFile("D:\\save.dat", dataLength, vout); //output Vout
 
