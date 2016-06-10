@@ -5,7 +5,7 @@ using namespace std;
 #define CHANNEL			32
 #define SCAN_LINE		81
 
-void calTimeDelay(double *tdf, double *tdmin, const int Ntx, const double pitch, const double soundspeed, const double FreqFPGASim)
+void calc_TimeDelay(double *tdf, double *tdmin, const int Ntx, const double pitch, const double soundspeed, const double FreqFPGASim)
 {
 	for (int p = 0; p < SIGNAL_SIZE; p++)
 	{
@@ -23,7 +23,7 @@ void calTimeDelay(double *tdf, double *tdmin, const int Ntx, const double pitch,
 	}
 }
 
-void tddsProcess(double *tdds, const int Nrx, const double *tdf, const double *tdmin, const double FreqFPGASam)
+void calc_tdds(double *tdds, const int Nrx, const double *tdf, const double *tdmin, const double FreqFPGASam)
 {
 	/*
 	tdd = tdf - tdmin; % time delay different from the center element (s)
@@ -34,14 +34,14 @@ void tddsProcess(double *tdds, const int Nrx, const double *tdf, const double *t
 			tdds[i + (p*Nrx)] = (tdf[i + (p*Nrx)] - tdmin[p])*FreqFPGASam;
 }
 
-void tdfindexProcess(int *indu, const int Nrx, const double *elementRxs)
+void calc_tdfindex(int *indu, const int Nrx, const double *elementRxs)
 {
 	for (int nl = 0; nl < SCAN_LINE; nl++)
 		for (int i = 0; i < Nrx; i++) //32.
 			indu[i + (nl * Nrx)] = (int)elementRxs[i + (nl * Nrx)] - nl - 1 + Nrx + 1; // index for tdfs
 }
 
-void tdrProcess(double *tdr, const int Nrx, const double *tdds, const int *indu, const double *t0)
+void calc_tdr(double *tdr, const int Nrx, const double *tdds, const int *indu, const double *t0)
 {
 	for (int nl = 0; nl < SCAN_LINE; nl++)
 		for (int p = 0; p < SIGNAL_SIZE; p++)

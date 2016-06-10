@@ -1,15 +1,14 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
 #include <fstream>
 #include <iostream>
 #include <ctime>
+
 #include "filecon.h"
 #include "delaycalc.h"
 
 //Cuda header
-#include <cuda_runtime.h>
+#include "cuda_runtime.h"
+#include "cuda_runtime_api.h"
+#include "device_launch_parameters.h"
 #include <cufft.h>
 #include <helper_functions.h>
 #include <helper_cuda.h>
@@ -18,14 +17,29 @@
 #define FREQ_SAMPLING	40000000  //40Mhz
 #define PITCH			0.0005	  //0.5mn
 #define SOUND_SPEED		1540	  //1540m/s
-#define SIGNAL_SIZE		8192	  
-#define CHANNEL			32
-#define SCAN_LINE		81
+#define SIGNAL_SIZE		8192	  //H
+#define CHANNEL			32		  //Point
+#define SCAN_LINE		81	      //W
 #define NBEFOREPULSE	538
 #define NRX				32
 #define NTX				32
 
 using namespace std;
+
+__global__ void tddsProcess(double *tdds, const int Nrx, double *tdf, double *tdmin, const double FreqFPGASam)
+
+{
+	int col = blockIdx.x*blockDim.x + threadIdx.x;
+	int row = blockIdx.y*blockDim.y + threadIdx.y;
+	int index = col + row*Nrx;
+
+	/*
+	for (int p = 0; p < SIGNAL_SIZE; p++)
+	for (int i = 0; i < Nrx*2; i++)//64
+	tdds[i + (p*Nrx*2)] = (tdf[i + (p*Nrx*2)] - tdmin[p])*FreqFPGASam;
+	*/
+	tdds[index] = (tdf[index] - tdmin[row])*FreqFPGASam;
+}
 
 void delaysum_beamforming(double *output, const double *tdr, const double *raw_signal)
 {
@@ -51,33 +65,36 @@ void delaysum_beamforming(double *output, const double *tdr, const double *raw_s
 
 int main()
 {
-	int    dataLength = SIGNAL_SIZE * SCAN_LINE;
-	int	   *tdfindex = new int[CHANNEL * SIGNAL_SIZE];
-	double *raw_datal = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
-	double *max_ps_delay = new double[SCAN_LINE];
-	double *elementRxs = new double[CHANNEL * SCAN_LINE];
-	double *t0 = new double[SCAN_LINE];
-	double *tdf = new double[2 * CHANNEL * SIGNAL_SIZE];
-	double *tdds = new double[2 * CHANNEL * SIGNAL_SIZE];
-	double *tdmin = new double[SIGNAL_SIZE];
-	double *tdr = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
-	double *vout = new double[SIGNAL_SIZE * SCAN_LINE];
-	
-	loadRawData("D:\\data.dat", raw_datal); // channel*scanline size
+	int    dataLength	= SIGNAL_SIZE * SCAN_LINE; // 663552
+	int	   *tdfindex	= new int   [CHANNEL * SIGNAL_SIZE];
+	double *t0			= new double[SCAN_LINE];
+	double *max_ps_delay= new double[SCAN_LINE];
+	double *tdmin		= new double[SIGNAL_SIZE];
+	double *elementRxs	= new double[CHANNEL * SCAN_LINE];
+	double *tdf			= new double[2 * CHANNEL * SIGNAL_SIZE];
+	double *tdds		= new double[2 * CHANNEL * SIGNAL_SIZE];
+	double *vout		= new double[SIGNAL_SIZE * SCAN_LINE];
+	double *raw_data	= new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
+	double *tdr			= new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
+	loadRawData("D:\\data.dat", raw_data); // channel*scanline size
 	loadData("D:\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadElementRxs("D:\\loadElementRxs.dat", elementRxs); // channel*scanline size
-
-	for (int i = 0; i < SCAN_LINE; i++) { *(t0 + i) = NBEFOREPULSE + *(max_ps_delay + i) / FREQ_FPGA_CLOCK * FREQ_SAMPLING; }
-	calTimeDelay(tdf, tdmin, NTX * 2, PITCH, SOUND_SPEED, FREQ_SAMPLING); // TDF
-	tddsProcess(tdds, NRX * 2, tdf, tdmin, FREQ_SAMPLING); //TDDS
-	tdfindexProcess(tdfindex, NRX, elementRxs);// Index TDF
-	tdrProcess(tdr, NRX, tdds, tdfindex, t0);//TDR
-	delaysum_beamforming(vout, tdr, raw_datal);
+	for (int i = 0; i < SCAN_LINE; i++) 
+	{ 
+		t0[i] = NBEFOREPULSE + (max_ps_delay[i] / FREQ_FPGA_CLOCK * FREQ_SAMPLING); 
+	}
+	calc_TimeDelay(tdf, tdmin, NTX * 2, PITCH, SOUND_SPEED, FREQ_SAMPLING); // TDF
+	calc_tdds(tdds, NRX * 2, tdf, tdmin, FREQ_SAMPLING); //TDDS	
+	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
+	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
+	//clock_t startTime1 = clock();
+	delaysum_beamforming(vout, tdr, raw_data);
+	//cout << "delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
 
 	writeFile("D:\\save.dat", dataLength, vout); //output Vout
 
 	delete tdfindex;
-	delete raw_datal;
+	delete raw_data;
 	delete max_ps_delay;
 	delete elementRxs;
 	delete t0;
