@@ -26,25 +26,39 @@
 
 using namespace std;
 
-__global__ void tddsProcess(double *tdds, const int Nrx, double *tdf, double *tdmin, const double FreqFPGASam)
-
+int Div0Up(int a, int b)//fix int/int=0
 {
-	int col = blockIdx.x*blockDim.x + threadIdx.x;
-	int row = blockIdx.y*blockDim.y + threadIdx.y;
-	int index = col + row*Nrx;
+	return ((a % b) != 0) ? (1) : (a / b);
+}
 
-	/*
-	for (int p = 0; p < SIGNAL_SIZE; p++)
-	for (int i = 0; i < Nrx*2; i++)//64
-	tdds[i + (p*Nrx*2)] = (tdf[i + (p*Nrx*2)] - tdmin[p])*FreqFPGASam;
-	*/
-	tdds[index] = (tdf[index] - tdmin[row])*FreqFPGASam;
+__global__ void beamforming1scanline(int nl, double *vout, const double *tdr, const double *raw_data)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	double sum;
+	int Ntdr = 0;
+	for (int p = threadID; p < SIGNAL_SIZE; p += numThreads)//1 scanline 8192 point
+	{
+		sum = 0;
+		//printf("W = %d H = %d\n", nl,threadID);
+		for (int i = 0; i < CHANNEL; i++)//1 point = 32 channel
+		{
+			Ntdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
+			//printf("%d ", Ntdr);
+			if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
+			{
+				sum += raw_data[Ntdr + (i * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
+			}
+		}
+		vout[p + (nl * SIGNAL_SIZE)] = sum;
+		//printf("sum = %lf\n",sum]);
+	}
 }
 
 void delaysum_beamforming(double *output, const double *tdr, const double *raw_signal)
 {
 	double sum = 0;
-	int ttdr = 0;
+	int Ntdr = 0;
 	for (int nl = 0; nl < SCAN_LINE; nl++) //81 scanline
 	{
 		for (int p = 0; p < SIGNAL_SIZE; p++)//1 scanline 8192 point
@@ -52,10 +66,10 @@ void delaysum_beamforming(double *output, const double *tdr, const double *raw_s
 			sum = 0;
 			for (int i = 0; i < CHANNEL; i++)//1 point = 32 channel
 			{
-				ttdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
-				if (ttdr < SIGNAL_SIZE)
+				Ntdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
+				if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
 				{
-					sum += raw_signal[ttdr + (i * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];
+					sum += raw_signal[Ntdr + (i * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
 				}
 			}
 			output[p + (nl * SIGNAL_SIZE)] = sum;
@@ -66,6 +80,9 @@ void delaysum_beamforming(double *output, const double *tdr, const double *raw_s
 int main()
 {
 	int    dataLength	= SIGNAL_SIZE * SCAN_LINE; // 663552
+	int	   Fullsize     = dataLength * CHANNEL *sizeof(double);
+	int    Imgsize      = dataLength * sizeof(double);
+	int    ChannelPsize = dataLength * CHANNEL * sizeof(double);
 	int	   *tdfindex	= new int   [CHANNEL * SIGNAL_SIZE];
 	double *t0			= new double[SCAN_LINE];
 	double *max_ps_delay= new double[SCAN_LINE];
@@ -76,6 +93,11 @@ int main()
 	double *vout		= new double[SIGNAL_SIZE * SCAN_LINE];
 	double *raw_data	= new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	double *tdr			= new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
+
+	double *d_vout;
+	double *d_tdr;
+	double *d_raw_signal;
+
 	loadRawData("D:\\data.dat", raw_data); // channel*scanline size
 	loadData("D:\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadElementRxs("D:\\loadElementRxs.dat", elementRxs); // channel*scanline size
@@ -87,10 +109,33 @@ int main()
 	calc_tdds(tdds, NRX * 2, tdf, tdmin, FREQ_SAMPLING); //TDDS	
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
 	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
+
 	//clock_t startTime1 = clock();
-	delaysum_beamforming(vout, tdr, raw_data);
+	//delaysum_beamforming(vout, tdr, raw_data);
 	//cout << "delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
 
+	cudaMalloc((void **)&d_vout, Imgsize);
+	cudaMalloc((void **)&d_tdr,Fullsize);
+	cudaMalloc((void **)&d_raw_signal,Fullsize);
+
+	cudaMemcpy(d_tdr, tdr, Fullsize, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_raw_signal, raw_data, Fullsize, cudaMemcpyHostToDevice);
+
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	float milliseconds = 0 ,sm = 0;
+	
+	for (int nl = 0; nl < SCAN_LINE; nl++){
+		cudaEventRecord(start);
+		beamforming1scanline << < 16, 512 >> >(nl, d_vout, d_tdr, d_raw_signal);
+		cudaEventRecord(stop);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&milliseconds, start, stop);
+		sm += milliseconds;
+	}
+	printf("%f ",sm);
+	cudaMemcpy(vout, d_vout, Imgsize, cudaMemcpyDeviceToHost);
 	writeFile("D:\\save.dat", dataLength, vout); //output Vout
 
 	delete tdfindex;
