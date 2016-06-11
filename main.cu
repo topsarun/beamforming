@@ -23,7 +23,9 @@
 #define NBEFOREPULSE	538
 #define NRX				32
 #define NTX				32
-#define HALFN			4097
+#define HALFN			4097	  //8192/2 +1 for hilbert transform
+#define EPSILON			1e-6	  //Matlab logcompressdb
+#define maxEnvValue		4294967296 //16777216 //2048 (2^11 x (2^5 = 32 ch)) ^ 2
 
 using namespace std;
 
@@ -137,6 +139,51 @@ __global__ void abscomplex(double *env, float2 *signal)
 	}
 }
 
+
+__global__ void Gpu_median_filter(double *Input_Image, double *Output_Image, int img_h, int img_w) {
+	double ingpuArray[9];
+	int count = 0;
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	if ((x >= (img_h - 1)) || (y >= img_w - 1) || (x == 0) || (y == 0)) //กรอบ 0
+		return;
+	for (int r = x - 1; r <= x + 1; r++)
+	{
+		for (int c = y - 1; c <= y + 1; c++)
+		{
+			ingpuArray[count++] = Input_Image[c*img_h + r];
+		}
+	}
+	for (int i = 0; i<5; ++i)
+	{
+		int min = i;
+		for (int l = i + 1; l<9; ++l)
+			if (ingpuArray[l] < ingpuArray[min])
+				min = l;
+		//swap(a,b)
+		double temp = ingpuArray[i];
+		ingpuArray[i] = ingpuArray[min];
+		ingpuArray[min] = temp;
+	}
+	Output_Image[(y*img_h) + x] = ingpuArray[4]; // 4 mid
+}
+
+__global__ void logCompressDB(double *env)
+{
+	const int nThdx = blockDim.x * gridDim.x;
+	const int nThdy = blockDim.y * gridDim.y;
+	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
+	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
+	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy)//81 scanline
+	{
+		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
+		{
+			env[p + (nl * SIGNAL_SIZE)] = 20.0 * __log10f(__fdividef(env[p + (nl * SIGNAL_SIZE)], maxEnvValue) + EPSILON);
+		}
+	}
+
+}
+
 void delaysum_beamforming(double *output, const double *tdr, const double *raw_signal)
 {
 	double sum = 0;
@@ -193,9 +240,9 @@ int main()
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
 	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
 
-	//clock_t startTime1 = clock();
-	//delaysum_beamforming(vout, tdr, raw_data);
-	//cout << "delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
+	clock_t startTime1 = clock();
+	delaysum_beamforming(vout, tdr, raw_data);
+	cout << "CPU delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
 
 	cufftHandle plan;
 	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C, 81);
@@ -211,9 +258,9 @@ int main()
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
-	float mi = 0, sm = 0 ,mh=0;
+	float mi = 0, sm = 0 ,mh=0 ,mf=0 ,ml=0;
 
-	/*for (int nl = 0; nl < SCAN_LINE; nl++){
+	for (int nl = 0; nl < SCAN_LINE; nl++){
 		cudaEventRecord(start);
 		beamforming1scanline << < 32, 256 >> >(nl, d_vout, d_tdr, d_raw_signal);
 		cudaEventRecord(stop);
@@ -221,15 +268,14 @@ int main()
 		cudaEventElapsedTime(&mi, start, stop);
 		sm += mi;
 	}
-	cout << "Gpubasic Beamfrom times = " << sm << "ms\n";
-	*/
+	cout << "Gpu basic Beamfrom times = " << sm << "ms\n";
 	
 	cudaEventRecord(start);
 	improve<< <dim3(256,1,1),dim3(32,32,1) >> >(d_vout, d_tdr, d_raw_signal);
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&mi, start, stop);
-	cout <<"GpuImprove beamfrom times = "<<mi<< "ms\n";
+	cout <<"Gpu Improve beamfrom times = "<<mi<< "ms\n";
 	
 	cudaEventRecord(start);
 	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_FORWARD);
@@ -240,6 +286,20 @@ int main()
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&mh, start, stop);
 	cout << "Gpu Hilbert times = " << mh << "ms\n";
+
+	cudaEventRecord(start);
+	Gpu_median_filter << <dim3(780, 1, 1), dim3(8, 128, 1) >> >(d_env, d_env, SIGNAL_SIZE, SCAN_LINE); // (x/FREQ_SAMPLING*SOUND_SPEED/2*100) = cm , if 12 cm x=6234 ,6234/8 = 780 Fullpic948
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&mf, start, stop);
+	cout << "Gpu Median Filter times = " << mf << "ms\n";
+
+	cudaEventRecord(start);
+	logCompressDB << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env);
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&ml, start, stop);
+	cout << "Gpu LogCompression times = " << ml << "ms\n";
 
 	cudaMemcpy(vout, d_env, Imgsize, cudaMemcpyDeviceToHost);
 	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
@@ -254,4 +314,10 @@ int main()
 	delete tdmin;
 	delete tdr;
 	delete vout;
+
+	cufftDestroy(plan);
+	cudaFree(d_vout);
+	cudaFree(d_tdr);
+	cudaFree(d_raw_signal);
+	cudaFree(d_env);
 }
