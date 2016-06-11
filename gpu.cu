@@ -1,15 +1,8 @@
 #include "gpu.cuh"
 
-#define FREQ_FPGA_CLOCK 100000000 //100Mhz
-#define FREQ_SAMPLING	40000000  //40Mhz
-#define PITCH			0.0005	  //0.5mn
-#define SOUND_SPEED		1540	  //1540m/s
 #define SIGNAL_SIZE		8192	  //H
 #define CHANNEL			32		  //Point
 #define SCAN_LINE		81	      //W
-#define NBEFOREPULSE	538
-#define NRX				32
-#define NTX				32
 #define HALFN			4097	  //8192/2 +1 for hilbert transform
 #define EPSILON			1e-6	  //Matlab logcompressdb
 

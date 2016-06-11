@@ -74,14 +74,14 @@ int main()
 	double *raw_data = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	double *tdr = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	float2 *vout_com = new float2[SIGNAL_SIZE * SCAN_LINE];
-	double *d_max;
-	int *d_mutex;
 
 	//Cuda mem init
 	float2 *d_vout;
 	double *d_tdr;
 	double *d_raw_signal;
+	double *d_max;
 	double *d_env;
+	int *d_mutex;
 
 	loadRawData("D:\\ultrasound\\loadData.dat", raw_data); // channel*scanline size
 	loadData("D:\\ultrasound\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
@@ -177,5 +177,7 @@ int main()
 	cudaFree(d_vout);
 	cudaFree(d_tdr);
 	cudaFree(d_raw_signal);
+	cudaFree(d_mutex);
+	cudaFree(d_max);
 	cudaFree(d_env);
 }
