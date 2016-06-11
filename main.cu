@@ -4,6 +4,7 @@
 
 #include "filecon.h"
 #include "delaycalc.h"
+#include "gpu.cuh"
 
 //Cuda header
 #include "cuda_runtime.h"
@@ -25,7 +26,6 @@
 #define NTX				32
 #define HALFN			4097	  //8192/2 +1 for hilbert transform
 #define EPSILON			1e-6	  //Matlab logcompressdb
-#define maxEnvValue		4294967296 //16777216 //2048 (2^11 x (2^5 = 32 ch)) ^ 2
 
 using namespace std;
 
@@ -33,156 +33,7 @@ int Div0Up(int a, int b)//fix int/int=0
 {
 	return ((a % b) != 0) ? (a / b + 1) : (a / b);
 }
-/*
-__device__ void channelcalc(double *sum, int p, int nl, const double *tdr, const double *raw_data)
-{
-int Ntdr = tdr[threadIdx.x + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
-if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
-{
-*sum += raw_data[Ntdr + (threadIdx.x * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
-}
-}
-*/
 
-__global__ void beamforming1scanline(int nl, float2 *vout, const double *tdr, const double *raw_data)
-{
-	const int nThd = blockDim.x * gridDim.x;
-	const int tID = blockIdx.x * blockDim.x + threadIdx.x;
-	double sum;
-	int Ntdr = 0;
-	for (int p = tID; p < SIGNAL_SIZE; p += nThd)//1 scanline 8192 point
-	{
-		sum = 0;
-		//printf("W = %d H = %d\n", nl,threadID);
-		for (int i = 0; i < CHANNEL; i++)//1 point = 32 channel
-		{
-			//channelcalc << <1, 32 >> >(sum, p, nl, tdr, raw_data); // my computer not suppport (compute capability > 3.5)
-			Ntdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
-			//printf("%d ", Ntdr);
-			if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
-			{
-				sum += raw_data[Ntdr + (i * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
-			}
-		}
-		vout[p + (nl * SIGNAL_SIZE)].x = sum;
-		vout[p + (nl * SIGNAL_SIZE)].y = 0;
-		//printf("sum = %lf\n",sum]);
-	}
-}
-
-__global__ void improve(float2 *vout, const double *tdr, const double *raw_data)
-{
-	const int nThdx = blockDim.x * gridDim.x;
-	const int nThdy = blockDim.y * gridDim.y;
-	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
-	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
-	double sum;
-	int Ntdr = 0;
-	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy) //81 scanline
-	{
-		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
-		{
-			sum = 0;
-			//printf("W = %d H = %d\n", nl,threadID);
-			for (int i = 0; i < CHANNEL; i++)//1 point = 32 channel
-			{
-				//channelcalc << <1, 32 >> >(sum, p, nl, tdr, raw_data); // my computer not suppport (compute capability > 3.5)
-				Ntdr = tdr[i + (p * CHANNEL) + (nl * SIGNAL_SIZE * CHANNEL)];
-				//printf("%d ", Ntdr);
-				if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
-				{
-					sum += raw_data[Ntdr + (i * SIGNAL_SIZE) + (nl * CHANNEL * SIGNAL_SIZE)];//H+C+W
-				}
-			}
-			vout[p + (nl * SIGNAL_SIZE)].x = sum;
-			vout[p + (nl * SIGNAL_SIZE)].y = 0;
-			//printf("sum = %lf\n",sum]);
-		}
-	}
-}
-
-__global__ void hilbert_step2(float2 *signal)
-{
-	const int nThdx = blockDim.x * gridDim.x;
-	const int nThdy = blockDim.y * gridDim.y;
-	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
-	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
-	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy) //81 scanline
-	{
-		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
-		{
-			if (p == 0);
-			else if (p < HALFN)
-			{
-				signal[p + (nl * SIGNAL_SIZE)].x *= 2; signal[p + (nl * SIGNAL_SIZE)].y *= 2;
-			}
-			else
-			{
-				signal[p + (nl * SIGNAL_SIZE)].x = 0.0; signal[p + (nl * SIGNAL_SIZE)].y = 0.0;
-			}
-		}
-	}
-}
-
-__global__ void abscomplex(double *env, float2 *signal)
-{
-	const int nThdx = blockDim.x * gridDim.x;
-	const int nThdy = blockDim.y * gridDim.y;
-	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
-	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
-	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy) //81 scanline
-	{
-		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
-		{
-			env[p + (nl * SIGNAL_SIZE)] = sqrt(pow(signal[p + (nl * SIGNAL_SIZE)].x, 2) + pow(signal[p + (nl * SIGNAL_SIZE)].y, 2));
-		}
-	}
-}
-
-
-__global__ void Gpu_median_filter(double *Input_Image, double *Output_Image, int img_h, int img_w) {
-	double ingpuArray[9];
-	int count = 0;
-	int x = blockDim.x * blockIdx.x + threadIdx.x;
-	int y = blockDim.y * blockIdx.y + threadIdx.y;
-	if ((x >= (img_h - 1)) || (y >= img_w - 1) || (x == 0) || (y == 0)) //กรอบ 0
-		return;
-	for (int r = x - 1; r <= x + 1; r++)
-	{
-		for (int c = y - 1; c <= y + 1; c++)
-		{
-			ingpuArray[count++] = Input_Image[c*img_h + r];
-		}
-	}
-	for (int i = 0; i<5; ++i)
-	{
-		int min = i;
-		for (int l = i + 1; l<9; ++l)
-			if (ingpuArray[l] < ingpuArray[min])
-				min = l;
-		//swap(a,b)
-		double temp = ingpuArray[i];
-		ingpuArray[i] = ingpuArray[min];
-		ingpuArray[min] = temp;
-	}
-	Output_Image[(y*img_h) + x] = ingpuArray[4]; // 4 mid
-}
-
-__global__ void logCompressDB(double *env)
-{
-	const int nThdx = blockDim.x * gridDim.x;
-	const int nThdy = blockDim.y * gridDim.y;
-	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
-	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
-	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy)//81 scanline
-	{
-		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
-		{
-			env[p + (nl * SIGNAL_SIZE)] = 20.0 * __log10f(__fdividef(env[p + (nl * SIGNAL_SIZE)], maxEnvValue) + EPSILON);
-		}
-	}
-
-}
 
 void delaysum_beamforming(double *output, const double *tdr, const double *raw_signal)
 {
@@ -223,6 +74,8 @@ int main()
 	double *raw_data = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	double *tdr = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	float2 *vout_com = new float2[SIGNAL_SIZE * SCAN_LINE];
+	double *d_max;
+	int *d_mutex;
 
 	//Cuda mem init
 	float2 *d_vout;
@@ -251,6 +104,10 @@ int main()
 	cudaMalloc((void **)&d_tdr, Fullsize);
 	cudaMalloc((void **)&d_raw_signal, Fullsize);
 	cudaMalloc((void **)&d_env, Imgsize);
+	cudaMalloc((void**)&d_max, sizeof(double));
+	cudaMalloc((void**)&d_mutex, sizeof(int));
+	cudaMemset(d_max, 0, sizeof(float));
+	cudaMemset(d_mutex, 0, sizeof(float));
 
 	cudaMemcpy(d_tdr, tdr, Fullsize, cudaMemcpyHostToDevice);
 	cudaMemcpy(d_raw_signal, raw_data, Fullsize, cudaMemcpyHostToDevice);
@@ -295,7 +152,8 @@ int main()
 	cout << "Gpu Median Filter times = " << mf << "ms\n";
 
 	cudaEventRecord(start);
-	logCompressDB << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env);
+	find_maximum << < 32, 256 >> >(d_env, d_max, d_mutex, SIGNAL_SIZE*SCAN_LINE); //<-danger
+	logCompressDB << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env, d_max);
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&ml, start, stop);
