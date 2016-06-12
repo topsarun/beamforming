@@ -2,10 +2,6 @@
 #include <iostream>
 #include <ctime>
 
-#include "filecon.h"
-#include "delaycalc.h"
-#include "gpu.cuh"
-
 //Cuda header
 #include "cuda_runtime.h"
 #include "cuda_runtime_api.h"
@@ -13,6 +9,17 @@
 #include <cufft.h>
 #include <helper_functions.h>
 #include <helper_cuda.h>
+
+//OpenCV
+#include "opencv2/core/core.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include "opencv2/ml/ml.hpp"
+
+//Project
+#include "filecon.h"
+#include "delaycalc.h"
+#include "gpu.cuh"
 
 #define FREQ_FPGA_CLOCK 100000000 //100Mhz
 #define FREQ_SAMPLING	40000000  //40Mhz
@@ -25,9 +32,10 @@
 #define NRX				32
 #define NTX				32
 #define HALFN			4097	  //8192/2 +1 for hilbert transform
-#define EPSILON			1e-6	  //Matlab logcompressdb
+#define EPSILON			1e-6	  //Matlab logcompressdb for minimum
 
 using namespace std;
+using namespace cv;
 
 int Div0Up(int a, int b)//fix int/int=0
 {
@@ -106,6 +114,7 @@ int main()
 	cudaMalloc((void **)&d_env, Imgsize);
 	cudaMalloc((void**)&d_max, sizeof(double));
 	cudaMalloc((void**)&d_mutex, sizeof(int));
+
 	cudaMemset(d_max, 0, sizeof(float));
 	cudaMemset(d_mutex, 0, sizeof(float));
 
@@ -117,6 +126,7 @@ int main()
 	cudaEventCreate(&stop);
 	float mi = 0, sm = 0 ,mh=0 ,mf=0 ,ml=0;
 
+	/*
 	for (int nl = 0; nl < SCAN_LINE; nl++){
 		cudaEventRecord(start);
 		beamforming1scanline << < 32, 256 >> >(nl, d_vout, d_tdr, d_raw_signal);
@@ -126,7 +136,8 @@ int main()
 		sm += mi;
 	}
 	cout << "Gpu basic Beamfrom times = " << sm << "ms\n";
-	
+	*/
+
 	cudaEventRecord(start);
 	improve<< <dim3(256,1,1),dim3(32,32,1) >> >(d_vout, d_tdr, d_raw_signal);
 	cudaEventRecord(stop);
@@ -161,6 +172,16 @@ int main()
 
 	cudaMemcpy(vout, d_env, Imgsize, cudaMemcpyDeviceToHost);
 	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
+	
+	for (int i = 0; i < 8192 * 81; i++)
+		vout[i] = (vout[i] + 180) / 255;
+	Mat A = Mat(81, 8192, CV_64FC1, vout);
+	A = A(Rect(0, 0, 6234, 81)); //Crop 6234 = 12  Cm
+	resize(A, A, Size(768, 243), CV_INTER_CUBIC);
+	transpose(A, A);
+	flip(A, A, 1);
+	imshow("Image", A);
+	waitKey(0);
 
 	delete tdfindex;
 	delete raw_data;
