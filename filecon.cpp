@@ -22,7 +22,7 @@ void loadRawData(const char* filename, double* readArray) {
 			for (int i = 0; i < SIGNAL_SIZE; i++)
 			{
 				file.read((char*)(&aDouble), sizeof(__int16));
-				readArray[i + (j*SIGNAL_SIZE) + (k*SIGNAL_SIZE*CHANNEL)] = aDouble;
+				readArray[i + (j*SIGNAL_SIZE) + (k*SIGNAL_SIZE*CHANNEL)] = aDouble-2048;
 			}
 		}
 	}

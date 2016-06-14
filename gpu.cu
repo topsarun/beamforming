@@ -74,6 +74,27 @@ __global__ void improve(float2 *vout, const double *tdr, const double *raw_data)
 	}
 }
 
+__global__ void hilbert_1line_step2(float2 *signal)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	int half_size_1 = SIGNAL_SIZE / 2 + 1;
+	for (int i = threadID; i < SIGNAL_SIZE; i += numThreads)
+	{
+		if (i == 0);
+		else if (i < half_size_1)
+		{
+			signal[i].x = signal[i].x * 2;
+			signal[i].y = signal[i].y * 2;
+		}
+		else
+		{
+			signal[i].x = 0.0;
+			signal[i].y = 0.0;
+		}
+	}
+}
+
 __global__ void hilbert_step2(float2 *signal)
 {
 	const int nThdx = blockDim.x * gridDim.x;
@@ -185,4 +206,32 @@ __global__ void logCompressDB(double *env, double *d_max)
 		}
 	}
 
+}
+
+__global__ void FilterCalc(float2 *signal, float2 *in, float2 *filter, int nl)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+
+	for (int i = threadID; i < SIGNAL_SIZE; i += numThreads)
+	{
+		signal[i + (nl*SIGNAL_SIZE)].x = in[i + (nl*SIGNAL_SIZE)].x * filter[i].x - in[i + (nl*SIGNAL_SIZE)].y * filter[i].y;
+		signal[i + (nl*SIGNAL_SIZE)].y = in[i + (nl*SIGNAL_SIZE)].x * filter[i].y + in[i + (nl*SIGNAL_SIZE)].y * filter[i].x;
+	}
+}
+
+__global__ void FilterCalcImprove1(float2 *signal, float2 *in, float2 *filter)
+{
+	const int nThdx = blockDim.x * gridDim.x;
+	const int nThdy = blockDim.y * gridDim.y;
+	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
+	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
+	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy) //81 scanline
+	{
+		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
+		{
+			signal[p + (nl*SIGNAL_SIZE)].x = in[p + (nl*SIGNAL_SIZE)].x * filter[p].x - in[p + (nl*SIGNAL_SIZE)].y * filter[p].y;
+			signal[p + (nl*SIGNAL_SIZE)].y = in[p + (nl*SIGNAL_SIZE)].x * filter[p].y + in[p + (nl*SIGNAL_SIZE)].y * filter[p].x;
+		}
+	}
 }
