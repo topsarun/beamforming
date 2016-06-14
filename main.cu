@@ -32,7 +32,7 @@
 #define NRX				32
 #define NTX				32
 #define HALFN			4097	  //8192/2 +1 for hilbert transform
-#define EPSILON			1e-6	  //Matlab logcompressdb for minimum
+#define STARTLOG		1e-9	  //Matlab logcompressdb for minimum
 
 using namespace std;
 using namespace cv;
@@ -40,12 +40,15 @@ using namespace cv;
 __global__ void FilterCalc(float2 *signal, float2 *filter)
 {
 	const int nThdx = blockDim.x * gridDim.x;
+	const int nThdy = blockDim.y * gridDim.y;
 	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
-	for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
-	{
-		signal[p].x = signal[p].x * filter[p].x - signal[p].y * filter[p].y;
-		signal[p].y = signal[p].x * filter[p].y + signal[p].y * filter[p].x;
-	}
+	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
+	for (int i = tIDy; i < SCAN_LINE; i += nThdy)
+		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
+		{
+			signal[p + (i*SIGNAL_SIZE)].x = signal[p + (i*SIGNAL_SIZE)].x * filter[p].x - signal[p + (i*SIGNAL_SIZE)].y * filter[p].y;
+			signal[p + (i*SIGNAL_SIZE)].y = signal[p + (i*SIGNAL_SIZE)].x * filter[p].y + signal[p + (i*SIGNAL_SIZE)].y * filter[p].x;
+		}
 }
 
 int Div0Up(int a, int b)//fix int/int=0
@@ -105,7 +108,7 @@ int main()
 	double *d_env;
 	int *d_mutex;
 
-	loadRawData("D:\\loadData.dat", raw_data); // channel*scanline size
+	loadRawData("D:\\rawRead.dat", raw_data); // channel*scanline size
 	loadData("D:\\ultrasound\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadData("D:\\ultrasound\\loadFilter.dat", 11, filter);
 	loadElementRxs("D:\\ultrasound\\loadElementRxs.dat", elementRxs); // channel*scanline size
@@ -127,14 +130,16 @@ int main()
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
 	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
 
+	/*
 	clock_t startTime1 = clock();
 	delaysum_beamforming(vout, tdr, raw_data);
 	cout << "CPU delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
+	*/
 
 	cufftHandle plan;
-	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C, SCAN_LINE);
+	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C,81);
 	cufftHandle plan1;
-	cufftPlan1d(&plan1, SIGNAL_SIZE, CUFFT_C2C, 1);
+	cufftPlan1d(&plan1, SIGNAL_SIZE, CUFFT_C2C,1);
 
 	cudaMalloc((void **)&d_filter_com, SIGNAL_SIZE * sizeof(float2));
 	cudaMalloc((void **)&d_vout, SIGNAL_SIZE * SCAN_LINE * sizeof(float2));
@@ -175,10 +180,18 @@ int main()
 	cudaEventElapsedTime(&mi, start, stop);
 	cout <<"Gpu Improve beamfrom times = "<<mi<< "ms\n";
 	
+	//TEST DATAF
+	/*
+	cudaMemcpy(vout_com, d_vout, SIGNAL_SIZE * SCAN_LINE * sizeof(float2), cudaMemcpyDeviceToHost);
+	for (int i = 0; i < 8192 * 81; i++)
+		vout[i] = vout_com[i].x;
+	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
+	*/
+
 	cudaEventRecord(start);
 	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_FORWARD);
 	cufftExecC2C(plan1, (cufftComplex *)d_filter_com, (cufftComplex *)d_filter_com, CUFFT_FORWARD);
-	FilterCalc << <dim3(8, 1, 1), dim3(1024, 1, 1) >> >(d_vout, d_filter_com);
+	FilterCalc << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_vout, d_filter_com);
 	hilbert_step2 << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_vout);
 	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_INVERSE);
 	abscomplex << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env, d_vout);
@@ -186,14 +199,14 @@ int main()
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&mh, start, stop);
 	cout << "Gpu Hilbert times = " << mh << "ms\n";
-
+	
 	cudaEventRecord(start);
 	Gpu_median_filter << <dim3(780, 1, 1), dim3(8, 128, 1) >> >(d_env, d_env, SIGNAL_SIZE, SCAN_LINE); // (x/FREQ_SAMPLING*SOUND_SPEED/2*100) = cm , if 12 cm x=6234 ,6234/8 = 780 Fullpic948
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&mf, start, stop);
 	cout << "Gpu Median Filter times = " << mf << "ms\n";
-
+	
 	cudaEventRecord(start);
 	find_maximum << < 32, 256 >> >(d_env, d_max, d_mutex, SIGNAL_SIZE*SCAN_LINE); //<-danger
 	logCompressDB << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env, d_max);

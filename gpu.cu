@@ -4,7 +4,7 @@
 #define CHANNEL			32		  //Point
 #define SCAN_LINE		81	      //W
 #define HALFN			4097	  //8192/2 +1 for hilbert transform
-#define EPSILON			1e-6	  //Matlab logcompressdb
+#define STARTLOG		1e-9	  //Matlab logcompressdb
 
 /*
 __device__ void channelcalc(double *sum, int p, int nl, const double *tdr, const double *raw_data)
@@ -107,7 +107,7 @@ __global__ void abscomplex(double *env, float2 *signal)
 	{
 		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
 		{
-			env[p + (nl * SIGNAL_SIZE)] = sqrt(pow(signal[p + (nl * SIGNAL_SIZE)].x, 2) + pow(signal[p + (nl * SIGNAL_SIZE)].y, 2));
+			env[p + (nl * SIGNAL_SIZE)] = pow(signal[p + (nl * SIGNAL_SIZE)].x, 2) + pow(signal[p + (nl * SIGNAL_SIZE)].y, 2);
 		}
 	}
 }
@@ -182,7 +182,7 @@ __global__ void logCompressDB(double *env, double *d_max)
 	{
 		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
 		{
-			env[p + (nl * SIGNAL_SIZE)] = 20.0 * __logf(__fdividef(env[p + (nl * SIGNAL_SIZE)], (float)*d_max) + EPSILON);
+			env[p + (nl * SIGNAL_SIZE)] = 10.0 * __logf(__fdividef(env[p + (nl * SIGNAL_SIZE)], (float)*d_max) + STARTLOG);
 		}
 	}
 

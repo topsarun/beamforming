@@ -14,15 +14,15 @@ void loadRawData(const char* filename, double* readArray) {
 		printf("Error can't open file Rawdata.\n");
 		return;
 	}
-	double aDouble = 0;
+	__int16 aDouble = 0;
 	for (int k = 0; k< SCAN_LINE && !file.eof(); k++)
 	{
 		for (int j = 0; j < CHANNEL; j++)
 		{
 			for (int i = 0; i < SIGNAL_SIZE; i++)
 			{
-				file.read((char*)(&aDouble), sizeof(double));
-				readArray[i + (j*SIGNAL_SIZE) + (k*SIGNAL_SIZE*CHANNEL)] = aDouble;
+				file.read((char*)(&aDouble), sizeof(__int16));
+				readArray[i + (j*SIGNAL_SIZE) + (k*SIGNAL_SIZE*CHANNEL)] = aDouble-2048;
 			}
 		}
 	}
