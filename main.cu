@@ -95,11 +95,13 @@ int main()
 	double *d_env;
 	int *d_mutex;
 
-	loadRawData("D:\\20160613_122303_RawDataD_0.data", raw_data); // channel*scanline size
+	//LOAD DATA
+	loadRawData("D:\\ultrasound\\RawData\\RawData20150613\\RMSPointTGC9876\\20160613_124110_RawDataD_0.data", raw_data); // channel*scanline size
 	loadData("D:\\ultrasound\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadData("D:\\ultrasound\\Filter\\BandFilter38Cof.dat", NUMCOFFILTER, filter);
 	loadElementRxs("D:\\ultrasound\\loadElementRxs.dat", elementRxs); // channel*scanline size
 
+	//deswitch noise
 	for (int i = 0; i < SCAN_LINE; i++)
 		t0[i] = NBEFOREPULSE + (max_ps_delay[i] / FREQ_FPGA_CLOCK * FREQ_SAMPLING);
 
@@ -119,6 +121,7 @@ int main()
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
 	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
 
+	//Stopwatch cpu
 	clock_t startTime1 = clock();
 	delaysum_beamforming(vout, tdr, raw_data);
 	cout << "CPU delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
@@ -142,50 +145,20 @@ int main()
 	cudaMemcpy(d_tdr, tdr, Fullsize, cudaMemcpyHostToDevice);
 	cudaMemcpy(d_raw_signal, raw_data, Fullsize, cudaMemcpyHostToDevice);
 
+	//Stopwatch gpu
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
-	float mi = 0, sm = 0 ,mh=0 ,mf=0 ,ml=0;
+	float mb=0,mh=0,mf=0,ml=0;
 
-	/*
-	for (int nl = 0; nl < SCAN_LINE; nl++){
-		cudaEventRecord(start);
-		beamforming1scanline << < 32, 256 >> >(nl, d_vout, d_tdr, d_raw_signal);
-		cudaEventRecord(stop);
-		cudaEventSynchronize(stop);
-		cudaEventElapsedTime(&mi, start, stop);
-		sm += mi;
-	}
-	cout << "Gpu basic Beamfrom times = " << sm << "ms\n";
-	*/
-
+	//beamfroming
 	cudaEventRecord(start);
 	improve<< <dim3(256,1,1),dim3(32,32,1) >> >(d_vout, d_tdr, d_raw_signal);
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
-	cudaEventElapsedTime(&mi, start, stop);
-	cout <<"Gpu Improve beamfrom times = "<<mi<< "ms\n";
+	cudaEventElapsedTime(&mb, start, stop);
+	cout <<"Gpu Improve beamfrom times = "<<mb<< "ms\n";
 	
-	//DATAF Output
-	/*
-	cudaMemcpy(vout_com, d_vout, SIGNAL_SIZE * SCAN_LINE * sizeof(float2), cudaMemcpyDeviceToHost);
-	for (int i = 0; i < 8192 * 81; i++)
-		vout[i] = vout_com[i].x;
-	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
-	*/
-
-	//OLD FILTER SLOW
-	/*
-	cufftExecC2C(plan, (cufftComplex *)d_filter_com, (cufftComplex *)d_filter_com, CUFFT_FORWARD);
-	for (int nl = 0; nl < 81; nl++ )
-	{
-		cufftExecC2C(plan1, (cufftComplex *)(d_vout + nl*SIGNAL_SIZE), (cufftComplex *)(d_vout + nl*SIGNAL_SIZE), CUFFT_FORWARD);
-		FilterCalc << <dim3(256, 1, 1), dim3(1024, 1, 1) >> >(d_Signalfilter , d_vout, d_filter_com, nl);
-		hilbert_1line_step2 << <dim3(256, 1, 1), dim3(1024, 1, 1) >> >(d_Signalfilter + nl*SIGNAL_SIZE);
-		cufftExecC2C(plan1, (cufftComplex *)(d_Signalfilter + nl*SIGNAL_SIZE), (cufftComplex *)(d_Signalfilter + nl*SIGNAL_SIZE), CUFFT_INVERSE);
-	}
-	*/
-
 	//Filter,Hilbert,abs
 	cudaEventRecord(start);
 	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_FORWARD);
@@ -220,6 +193,7 @@ int main()
 	cudaMemcpy(vout, d_env, Imgsize, cudaMemcpyDeviceToHost);
 	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
 	
+	//OpenCV IMG
 	for (int i = 0; i < 8192 * 81; i++)
 		vout[i] = (vout[i] + 180) / 255;
 	Mat A = Mat(81, 8192, CV_64FC1, vout);
@@ -229,6 +203,7 @@ int main()
 	imshow("Image", A);
 	waitKey(0);
 
+	//Clear Free Store
 	delete tdfindex;
 	delete raw_data;
 	delete max_ps_delay;
@@ -243,6 +218,7 @@ int main()
 	delete vout_com;
 	delete filter_com;
 
+	//Clear MEM GPU
 	cufftDestroy(plan);
 	cufftDestroy(plan1);
 	cudaFree(d_vout);

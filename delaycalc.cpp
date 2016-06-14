@@ -13,6 +13,7 @@ void calc_TimeDelay(double *tdf, double *tdmin, const int Ntx, const double pitc
 		for (int i = 0; i < Ntx; i++)//64
 		{
 			/*
+			td (time delay to pick a sample in the data)
 			td = sqrt(([1:Nrx]-(Nrx/2+0.5)).^2*(pitch/c)^2 + (p/(2*fs)).^2); % time delay [s]
 			tdmin = min(td);
 			*/
@@ -34,17 +35,18 @@ void calc_tdds(double *tdds, const int Nrx, const double *tdf, const double *tdm
 			tdds[i + (p*Nrx)] = (tdf[i + (p*Nrx)] - tdmin[p])*FreqFPGASam;
 }
 
-void calc_tdfindex(int *indu, const int Nrx, const double *elementRxs)
+void calc_tdfindex(int *tdfindex, const int Nrx, const double *elementRxs)
 {
 	for (int nl = 0; nl < SCAN_LINE; nl++)
-		for (int i = 0; i < Nrx; i++) //32.
-			indu[i + (nl * Nrx)] = (int)elementRxs[i + (nl * Nrx)] - nl - 1 + Nrx + 1; // index for tdfs
+		for (int i = 0; i < Nrx; i++)//32.
+			tdfindex[i + (nl * Nrx)] = (int)elementRxs[i + (nl * Nrx)] - nl - 1 + Nrx + 1; // index for tdfs
 }
 
 void calc_tdr(double *tdr, const int Nrx, const double *tdds, const int *indu, const double *t0)
 {
-	for (int nl = 0; nl < SCAN_LINE; nl++)
-		for (int p = 0; p < SIGNAL_SIZE; p++)
-			for (int i = 0; i < Nrx; i++) //32.
-				tdr[i + (p * Nrx) + (nl * SIGNAL_SIZE * Nrx)] = round(t0[nl] + tdds[indu[i + (nl * Nrx)] - 1 + (p * 64)] + p);
+	//round(td)
+	for (int k = 0; k < SCAN_LINE; k++)
+		for (int j = 0; j < SIGNAL_SIZE; j++)
+			for (int i = 0; i < Nrx; i++)//32.
+				tdr[i + (j * Nrx) + (k * SIGNAL_SIZE * Nrx)] = round(t0[k] + tdds[indu[i + (k * Nrx)] - 1 + (j * 64)] + j);
 }

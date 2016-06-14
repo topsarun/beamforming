@@ -78,11 +78,10 @@ __global__ void hilbert_1line_step2(float2 *signal)
 {
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
-	int half_size_1 = SIGNAL_SIZE / 2 + 1;
 	for (int i = threadID; i < SIGNAL_SIZE; i += numThreads)
 	{
 		if (i == 0);
-		else if (i < half_size_1)
+		else if (i < HALFN)
 		{
 			signal[i].x = signal[i].x * 2;
 			signal[i].y = signal[i].y * 2;

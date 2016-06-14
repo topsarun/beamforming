@@ -12,5 +12,4 @@ __global__ void logCompressDB(double *env, double *d_max);
 __global__ void FilterCalc(float2 *signal, float2 *in, float2 *filter, int nl);
 __global__ void FilterCalcImprove1(float2 *signal, float2 *in, float2 *filter);
 
-
 #endif
