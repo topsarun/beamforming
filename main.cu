@@ -37,6 +37,17 @@
 using namespace std;
 using namespace cv;
 
+__global__ void FilterCalc(float2 *signal, float2 *filter)
+{
+	const int nThdx = blockDim.x * gridDim.x;
+	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
+	for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
+	{
+		signal[p].x = signal[p].x * filter[p].x - signal[p].y * filter[p].y;
+		signal[p].y = signal[p].x * filter[p].y + signal[p].y * filter[p].x;
+	}
+}
+
 int Div0Up(int a, int b)//fix int/int=0
 {
 	return ((a % b) != 0) ? (a / b + 1) : (a / b);
@@ -81,9 +92,12 @@ int main()
 	double *vout = new double[SIGNAL_SIZE * SCAN_LINE];
 	double *raw_data = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	double *tdr = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
+	double *filter = new double[SIGNAL_SIZE];
 	float2 *vout_com = new float2[SIGNAL_SIZE * SCAN_LINE];
+	float2 *filter_com = new float2[SIGNAL_SIZE];
 
 	//Cuda mem init
+	float2 *d_filter_com;
 	float2 *d_vout;
 	double *d_tdr;
 	double *d_raw_signal;
@@ -91,11 +105,23 @@ int main()
 	double *d_env;
 	int *d_mutex;
 
-	loadRawData("D:\\ultrasound\\loadData.dat", raw_data); // channel*scanline size
+	loadRawData("D:\\loadData.dat", raw_data); // channel*scanline size
 	loadData("D:\\ultrasound\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
+	loadData("D:\\ultrasound\\loadFilter.dat", 11, filter);
 	loadElementRxs("D:\\ultrasound\\loadElementRxs.dat", elementRxs); // channel*scanline size
+
 	for (int i = 0; i < SCAN_LINE; i++)
 		t0[i] = NBEFOREPULSE + (max_ps_delay[i] / FREQ_FPGA_CLOCK * FREQ_SAMPLING);
+
+	for (int i = 0; i < 11; ++i)
+	{ 
+		filter_com[i].x = filter[i] ; filter_com[i].y = 0;
+	}
+	for (int i = 11; i < SIGNAL_SIZE; ++i)
+	{
+		filter_com[i].x = 0; filter_com[i].y = 0;
+	}
+
 	calc_TimeDelay(tdf, tdmin, NTX * 2, PITCH, SOUND_SPEED, FREQ_SAMPLING); // TDF
 	calc_tdds(tdds, NRX * 2, tdf, tdmin, FREQ_SAMPLING); //TDDS	
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
@@ -106,8 +132,11 @@ int main()
 	cout << "CPU delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
 
 	cufftHandle plan;
-	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C, 81);
+	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C, SCAN_LINE);
+	cufftHandle plan1;
+	cufftPlan1d(&plan1, SIGNAL_SIZE, CUFFT_C2C, 1);
 
+	cudaMalloc((void **)&d_filter_com, SIGNAL_SIZE * sizeof(float2));
 	cudaMalloc((void **)&d_vout, SIGNAL_SIZE * SCAN_LINE * sizeof(float2));
 	cudaMalloc((void **)&d_tdr, Fullsize);
 	cudaMalloc((void **)&d_raw_signal, Fullsize);
@@ -118,6 +147,7 @@ int main()
 	cudaMemset(d_max, 0, sizeof(float));
 	cudaMemset(d_mutex, 0, sizeof(float));
 
+	cudaMemcpy(d_filter_com, filter_com, SIGNAL_SIZE * sizeof(float2), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_tdr, tdr, Fullsize, cudaMemcpyHostToDevice);
 	cudaMemcpy(d_raw_signal, raw_data, Fullsize, cudaMemcpyHostToDevice);
 
@@ -147,6 +177,8 @@ int main()
 	
 	cudaEventRecord(start);
 	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_FORWARD);
+	cufftExecC2C(plan1, (cufftComplex *)d_filter_com, (cufftComplex *)d_filter_com, CUFFT_FORWARD);
+	FilterCalc << <dim3(8, 1, 1), dim3(1024, 1, 1) >> >(d_vout, d_filter_com);
 	hilbert_step2 << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_vout);
 	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_INVERSE);
 	abscomplex << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env, d_vout);
@@ -179,7 +211,6 @@ int main()
 	A = A(Rect(0, 0, 6234, 81)); //Crop 6234 = 12  Cm
 	resize(A, A, Size(768, 243), CV_INTER_CUBIC);
 	transpose(A, A);
-	flip(A, A, 1);
 	imshow("Image", A);
 	waitKey(0);
 
