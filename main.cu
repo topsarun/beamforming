@@ -37,18 +37,55 @@
 using namespace std;
 using namespace cv;
 
-__global__ void FilterCalc(float2 *signal, float2 *filter)
+__global__ void hProcess(float2 *signal)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+
+	int half_size_1 = SIGNAL_SIZE / 2 + 1;
+
+	for (int i = threadID; i < SIGNAL_SIZE; i += numThreads)
+	{
+		if (i == 0);
+		else if (i < half_size_1)
+		{
+			signal[i].x = signal[i].x * 2;
+			signal[i].y = signal[i].y * 2;
+		}
+		else
+		{
+			signal[i].x = 0.0;
+			signal[i].y = 0.0;
+		}
+	}
+}
+
+__global__ void FilterCalc(float2 *signal, float2 *in, float2 *filter, int nl)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+
+	for (int i = threadID; i < SIGNAL_SIZE; i += numThreads)
+	{
+		signal[i + (nl*SIGNAL_SIZE)].x = in[i + (nl*SIGNAL_SIZE)].x * filter[i].x - in[i + (nl*SIGNAL_SIZE)].y * filter[i].y;
+		signal[i + (nl*SIGNAL_SIZE)].y = in[i + (nl*SIGNAL_SIZE)].x * filter[i].y + in[i + (nl*SIGNAL_SIZE)].y * filter[i].x;
+	}
+}
+
+__global__ void FilterCalcImprove1(float2 *signal, float2 *in, float2 *filter)
 {
 	const int nThdx = blockDim.x * gridDim.x;
 	const int nThdy = blockDim.y * gridDim.y;
 	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
 	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
-	for (int i = tIDy; i < SCAN_LINE; i += nThdy)
+	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy) //81 scanline
+	{
 		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point
 		{
-			signal[p + (i*SIGNAL_SIZE)].x = signal[p + (i*SIGNAL_SIZE)].x * filter[p].x - signal[p + (i*SIGNAL_SIZE)].y * filter[p].y;
-			signal[p + (i*SIGNAL_SIZE)].y = signal[p + (i*SIGNAL_SIZE)].x * filter[p].y + signal[p + (i*SIGNAL_SIZE)].y * filter[p].x;
+			signal[p + (nl*SIGNAL_SIZE)].x = in[p + (nl*SIGNAL_SIZE)].x * filter[p].x - in[p + (nl*SIGNAL_SIZE)].y * filter[p].y;
+			signal[p + (nl*SIGNAL_SIZE)].y = in[p + (nl*SIGNAL_SIZE)].x * filter[p].y + in[p + (nl*SIGNAL_SIZE)].y * filter[p].x;
 		}
+	}
 }
 
 int Div0Up(int a, int b)//fix int/int=0
@@ -100,6 +137,7 @@ int main()
 	float2 *filter_com = new float2[SIGNAL_SIZE];
 
 	//Cuda mem init
+	float2 *d_Signalfilter;
 	float2 *d_filter_com;
 	float2 *d_vout;
 	double *d_tdr;
@@ -108,7 +146,7 @@ int main()
 	double *d_env;
 	int *d_mutex;
 
-	loadRawData("D:\\rawRead.dat", raw_data); // channel*scanline size
+	loadRawData("D:\\20160613_122303_RawDataD_0.data", raw_data); // channel*scanline size
 	loadData("D:\\ultrasound\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadData("D:\\ultrasound\\loadFilter.dat", 11, filter);
 	loadElementRxs("D:\\ultrasound\\loadElementRxs.dat", elementRxs); // channel*scanline size
@@ -117,32 +155,32 @@ int main()
 		t0[i] = NBEFOREPULSE + (max_ps_delay[i] / FREQ_FPGA_CLOCK * FREQ_SAMPLING);
 
 	for (int i = 0; i < 11; ++i)
-	{ 
-		filter_com[i].x = filter[i] ; filter_com[i].y = 0;
+	{
+		filter_com[i].x = filter[i]; filter_com[i].y = 0;
 	}
 	for (int i = 11; i < SIGNAL_SIZE; ++i)
 	{
 		filter_com[i].x = 0; filter_com[i].y = 0;
 	}
 
+
 	calc_TimeDelay(tdf, tdmin, NTX * 2, PITCH, SOUND_SPEED, FREQ_SAMPLING); // TDF
 	calc_tdds(tdds, NRX * 2, tdf, tdmin, FREQ_SAMPLING); //TDDS	
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
 	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
 
-	/*
 	clock_t startTime1 = clock();
 	delaysum_beamforming(vout, tdr, raw_data);
 	cout << "CPU delaysum_beamforming times = "<<double(clock() - startTime1) / (double)CLOCKS_PER_SEC*1000 << " ms." << endl;
-	*/
 
 	cufftHandle plan;
-	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C,81);
+	cufftPlan1d(&plan, SIGNAL_SIZE, CUFFT_C2C, 1);
 	cufftHandle plan1;
 	cufftPlan1d(&plan1, SIGNAL_SIZE, CUFFT_C2C,1);
 
 	cudaMalloc((void **)&d_filter_com, SIGNAL_SIZE * sizeof(float2));
 	cudaMalloc((void **)&d_vout, SIGNAL_SIZE * SCAN_LINE * sizeof(float2));
+	cudaMalloc((void **)&d_Signalfilter, SIGNAL_SIZE * SCAN_LINE * sizeof(float2));
 	cudaMalloc((void **)&d_tdr, Fullsize);
 	cudaMalloc((void **)&d_raw_signal, Fullsize);
 	cudaMalloc((void **)&d_env, Imgsize);
@@ -188,13 +226,20 @@ int main()
 	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
 	*/
 
+	cufftExecC2C(plan, (cufftComplex *)d_filter_com, (cufftComplex *)d_filter_com, CUFFT_FORWARD);
+	for (int nl = 0; nl < 81; nl++ )
+	{
+		cufftExecC2C(plan1, (cufftComplex *)(d_vout + nl*SIGNAL_SIZE), (cufftComplex *)(d_vout + nl*SIGNAL_SIZE), CUFFT_FORWARD);
+		FilterCalc << <dim3(256, 1, 1), dim3(1024, 1, 1) >> >(d_Signalfilter , d_vout, d_filter_com, nl);
+		hProcess << <dim3(256, 1, 1), dim3(1024, 1, 1) >> >(d_Signalfilter + nl*SIGNAL_SIZE);
+		cufftExecC2C(plan1, (cufftComplex *)(d_Signalfilter + nl*SIGNAL_SIZE), (cufftComplex *)(d_Signalfilter + nl*SIGNAL_SIZE), CUFFT_INVERSE);
+	}
+
 	cudaEventRecord(start);
-	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_FORWARD);
-	cufftExecC2C(plan1, (cufftComplex *)d_filter_com, (cufftComplex *)d_filter_com, CUFFT_FORWARD);
-	FilterCalc << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_vout, d_filter_com);
-	hilbert_step2 << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_vout);
-	cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_INVERSE);
-	abscomplex << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env, d_vout);
+	//cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_FORWARD);
+	//hilbert_step2 << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_vout);
+	//cufftExecC2C(plan, (cufftComplex *)d_vout, (cufftComplex *)d_vout, CUFFT_INVERSE);
+	abscomplex << <dim3(256, 1, 1), dim3(32, 32, 1) >> >(d_env, d_Signalfilter);
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&mh, start, stop);

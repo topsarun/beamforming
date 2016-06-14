@@ -112,7 +112,6 @@ __global__ void abscomplex(double *env, float2 *signal)
 	}
 }
 
-
 __global__ void Gpu_median_filter(double *Input_Image, double *Output_Image, int img_h, int img_w) 
 {
 	float ingpuArray[9];
