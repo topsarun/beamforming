@@ -17,12 +17,11 @@ if (Ntdr < SIGNAL_SIZE) //protect out of SIGNAL_SIZE bound
 }
 */
 
-__global__ void beamforming1scanline(int nl, float2 *vout, const double *tdr, const double *raw_data)
+__global__ void beamforming1scanline(int nl, float2 *vout, const double *tdr, const __int16 *raw_data)
 {
 	const int nThd = blockDim.x * gridDim.x;
 	const int tID = blockIdx.x * blockDim.x + threadIdx.x;
-	double sum;
-	int Ntdr = 0;
+	__int16 sum , Ntdr = 0;
 	for (int p = tID; p < SIGNAL_SIZE; p += nThd)//1 scanline 8192 point
 	{
 		sum = 0;
@@ -43,14 +42,13 @@ __global__ void beamforming1scanline(int nl, float2 *vout, const double *tdr, co
 	}
 }
 
-__global__ void improve(float2 *vout, const double *tdr, const double *raw_data)
+__global__ void improve(float2 *vout, const double *tdr, const __int16 *raw_data)
 {
 	const int nThdx = blockDim.x * gridDim.x;
 	const int nThdy = blockDim.y * gridDim.y;
 	const int tIDx = blockIdx.x * blockDim.x + threadIdx.x;
 	const int tIDy = blockIdx.y * blockDim.y + threadIdx.y;
-	double sum;
-	int Ntdr = 0;
+	__int16 sum , Ntdr = 0;
 	for (int nl = tIDy; nl < SCAN_LINE; nl += nThdy) //81 scanline
 	{
 		for (int p = tIDx; p < SIGNAL_SIZE; p += nThdx)//1 scanline 8192 point

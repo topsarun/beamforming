@@ -14,7 +14,6 @@
 #include "opencv2/core/core.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
-#include "opencv2/ml/ml.hpp"
 
 //Project
 #include "filecon.h"
@@ -43,7 +42,7 @@ int Div0Up(int a, int b)//fix int/int=0
 	return ((a % b) != 0) ? (a / b + 1) : (a / b);
 }
 
-void delaysum_beamforming(double *output, const double *tdr, const double *raw_signal)
+void delaysum_beamforming(double *output, const double *tdr, const __int16 *raw_signal)
 {
 	double sum = 0;
 	int Ntdr = 0;
@@ -79,27 +78,26 @@ int main()
 	double *tdf = new double[2 * CHANNEL * SIGNAL_SIZE];
 	double *tdds = new double[2 * CHANNEL * SIGNAL_SIZE];
 	double *vout = new double[SIGNAL_SIZE * SCAN_LINE];
-	double *raw_data = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	double *tdr = new double[SIGNAL_SIZE * CHANNEL * SCAN_LINE];
 	double *filter = new double[SIGNAL_SIZE];
-	float2 *vout_com = new float2[SIGNAL_SIZE * SCAN_LINE];
 	float2 *filter_com = new float2[SIGNAL_SIZE];
+	__int16 *raw_data = new __int16[dataLength * CHANNEL];
 
 	//Cuda mem init
+	__int16 *d_raw_signal;
 	float2 *d_Signalfilter;
 	float2 *d_filter_com;
 	float2 *d_vout;
 	double *d_tdr;
-	double *d_raw_signal;
 	double *d_max;
 	double *d_env;
 	int *d_mutex;
 
 	//LOAD DATA
-	loadRawData("D:\\ultrasound\\RawData\\RawData20150613\\RMSPointTGC9876\\20160613_124110_RawDataD_0.data", raw_data); // channel*scanline size
-	loadData("D:\\ultrasound\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
+	loadRawData("D:\\ultrasound\\RawData\\RawData20150613\\RMSCystTGC9876\\20160613_124301_RawDataD_0.data", raw_data); // channel*scanline size
+	loadData("D:\\ultrasound\\ProgramData\\loadPsDelay.dat", SCAN_LINE, max_ps_delay);
 	loadData("D:\\ultrasound\\Filter\\BandFilter38Cof.dat", NUMCOFFILTER, filter);
-	loadElementRxs("D:\\ultrasound\\loadElementRxs.dat", elementRxs); // channel*scanline size
+	loadElementRxs("D:\\ultrasound\\ProgramData\\loadElementRxs.dat", elementRxs); // channel*scanline size
 
 	//deswitch noise
 	for (int i = 0; i < SCAN_LINE; i++)
@@ -108,11 +106,13 @@ int main()
 	//Filter zero add
 	for (int i = 0; i < NUMCOFFILTER; ++i)
 	{
-		filter_com[i].x = filter[i]; filter_com[i].y = 0;
+		filter_com[i].x = (float)filter[i];
+		filter_com[i].y = 0;
 	}
 	for (int i = NUMCOFFILTER; i < SIGNAL_SIZE; ++i)
 	{
-		filter_com[i].x = 0; filter_com[i].y = 0;
+		filter_com[i].x = 0;
+		filter_com[i].y = 0;
 	}
 
 	//calc Delay time
@@ -121,6 +121,16 @@ int main()
 	calc_tdfindex(tdfindex, NRX, elementRxs);// Index TDF
 	calc_tdr(tdr, NRX, tdds, tdfindex, t0);//TDR
 
+	//Clear RAM
+	delete max_ps_delay;
+	delete filter;
+	delete tdmin;
+	delete tdf;
+	delete tdds;
+	delete elementRxs;
+	delete t0;
+	delete tdfindex;
+	
 	//Stopwatch cpu
 	clock_t startTime1 = clock();
 	delaysum_beamforming(vout, tdr, raw_data);
@@ -135,15 +145,20 @@ int main()
 	cudaMalloc((void **)&d_vout, SIGNAL_SIZE * SCAN_LINE * sizeof(float2));
 	cudaMalloc((void **)&d_Signalfilter, SIGNAL_SIZE * SCAN_LINE * sizeof(float2));
 	cudaMalloc((void **)&d_tdr, Fullsize);
-	cudaMalloc((void **)&d_raw_signal, Fullsize);
+	cudaMalloc((void **)&d_raw_signal, dataLength * CHANNEL * sizeof(__int16));
 	cudaMalloc((void **)&d_env, Imgsize);
 	cudaMalloc((void**)&d_max, sizeof(double));
 	cudaMalloc((void**)&d_mutex, sizeof(int));
 	cudaMemset(d_max, 0, sizeof(float));
 	cudaMemset(d_mutex, 0, sizeof(float));
-	cudaMemcpy(d_filter_com, filter_com, SIGNAL_SIZE * sizeof(float2), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_tdr, tdr, Fullsize, cudaMemcpyHostToDevice);
-	cudaMemcpy(d_raw_signal, raw_data, Fullsize, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_raw_signal, raw_data, dataLength * CHANNEL * sizeof(__int16), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_filter_com, filter_com, SIGNAL_SIZE * sizeof(float2), cudaMemcpyHostToDevice);
+
+	//Clear RAM
+	delete tdr;
+	delete raw_data;
+	delete filter_com;
 
 	//Stopwatch gpu
 	cudaEvent_t start, stop;
@@ -189,7 +204,7 @@ int main()
 	cudaEventElapsedTime(&ml, start, stop);
 	cout << "Gpu LogCompression times = " << ml << "ms\n";
 
-	//Output
+	//Output File
 	cudaMemcpy(vout, d_env, Imgsize, cudaMemcpyDeviceToHost);
 	writeFile("D:\\ultrasound\\save.dat", dataLength, vout); //output Vout
 	
@@ -203,29 +218,17 @@ int main()
 	imshow("Image", A);
 	waitKey(0);
 
-	//Clear Free Store
-	delete tdfindex;
-	delete raw_data;
-	delete max_ps_delay;
-	delete elementRxs;
-	delete t0;
-	delete tdf;
-	delete tdds;
-	delete tdmin;
-	delete tdr;
+	//Clear RAM
 	delete vout;
-	delete filter;
-	delete vout_com;
-	delete filter_com;
 
 	//Clear MEM GPU
+	cudaFree(d_tdr);
+	cudaFree(d_raw_signal);
 	cufftDestroy(plan);
 	cufftDestroy(plan1);
 	cudaFree(d_vout);
-	cudaFree(d_tdr);
-	cudaFree(d_raw_signal);
+	cudaFree(d_Signalfilter);
 	cudaFree(d_mutex);
 	cudaFree(d_max);
 	cudaFree(d_env);
-	cudaFree(d_Signalfilter);
 }

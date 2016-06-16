@@ -1,8 +1,8 @@
 #ifndef GPU
 #define GPU
 
-__global__ void beamforming1scanline(int nl, float2 *vout, const double *tdr, const double *raw_data);
-__global__ void improve(float2 *vout, const double *tdr, const double *raw_data);
+__global__ void beamforming1scanline(int nl, float2 *vout, const double *tdr, const __int16 *raw_data);
+__global__ void improve(float2 *vout, const double *tdr, const __int16 *raw_data);
 __global__ void hilbert_1line_step2(float2 *signal);
 __global__ void hilbert_step2(float2 *signal);
 __global__ void abscomplex(double *env, float2 *signal);

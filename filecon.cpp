@@ -7,7 +7,7 @@ using namespace std;
 #define CHANNEL			32
 #define SCAN_LINE		81
 
-void loadRawData(const char* filename, double* readArray) {
+void loadRawData(const char* filename, __int16* readArray) {
 	ifstream file(filename, ios::binary | ios::in);
 	if (!file.is_open())
 	{
@@ -64,7 +64,7 @@ void loadData(const char* filename, int size, double* readArray) {
 
 void writeFileRawData(const char *filename, double* readArray)
 {
-	ofstream output(filename, std::ios::binary | std::ios::out);
+	ofstream output(filename, ios::binary | ios::out);
 	for (int k = 0; k < SCAN_LINE; k++)
 		for (int j = 0; j < CHANNEL; j++)
 			for (int i = 0; i < SIGNAL_SIZE; i++)
@@ -74,7 +74,7 @@ void writeFileRawData(const char *filename, double* readArray)
 
 void writeFileElementRxs(const char *filename, double* readArray)
 {
-	ofstream output(filename, std::ios::binary | std::ios::out);
+	ofstream output(filename, ios::binary | ios::out);
 	for (int j = 0; j < SCAN_LINE; j++)
 		for (int i = 0; i < CHANNEL; i++)
 			output.write((char *)&readArray[i + (j*CHANNEL)], sizeof(double));
@@ -83,7 +83,7 @@ void writeFileElementRxs(const char *filename, double* readArray)
 
 void writeFile(const char *filename, const int size, double* readArray)
 {
-	ofstream output(filename, std::ios::binary | std::ios::out);
+	ofstream output(filename, ios::binary | ios::out);
 	for (int i = 0; i < size; i++)
 	{
 		output.write((char *)&readArray[i], sizeof(double));
