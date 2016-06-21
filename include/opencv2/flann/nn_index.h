@@ -31,8 +31,6 @@
 #ifndef OPENCV_FLANN_NNINDEX_H
 #define OPENCV_FLANN_NNINDEX_H
 
-#include <string>
-
 #include "general.h"
 #include "matrix.h"
 #include "result_set.h"
@@ -58,11 +56,6 @@ public:
      * \brief Builds the index
      */
     virtual void buildIndex() = 0;
-
-    /**
-     * \brief implementation for algorithms of addable indexes after that.
-     */
-    virtual void addIndex(const Matrix<ElementType>& wholeData, const Matrix<ElementType>& additionalData) = 0;
 
     /**
      * \brief Perform k-nearest neighbor search

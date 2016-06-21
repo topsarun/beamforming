@@ -1,9 +1,12 @@
 #include <iostream>
 #include "delaycalc.h"
+
 using namespace std;
 #define SIGNAL_SIZE		8192	  
 #define CHANNEL			32
 #define SCAN_LINE		81
+#define FREQ_SAMPLING	40000000  //40Mhz
+#define M_PI 3.14159265358979323846
 
 void calc_TimeDelay(double *tdf, double *tdmin, const int Ntx, const double pitch, const double soundspeed, const double FreqFPGASim)
 {

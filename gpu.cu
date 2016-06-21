@@ -5,6 +5,8 @@
 #define SCAN_LINE		81	      //W
 #define HALFN			4097	  //8192/2 +1 for hilbert transform
 #define STARTLOG		1e-9	  //Matlab logcompressdb
+#define FREQ_SAMPLING	40000000  //40Mhz
+#define M_PI 3.14159265358979323846
 
 /*
 __device__ void channelcalc(double *sum, int p, int nl, const double *tdr, const double *raw_data)
@@ -105,11 +107,13 @@ __global__ void hilbert_step2(float2 *signal)
 			if (p == 0);
 			else if (p < HALFN)
 			{
-				signal[p + (nl * SIGNAL_SIZE)].x *= 2; signal[p + (nl * SIGNAL_SIZE)].y *= 2;
+				signal[p + (nl * SIGNAL_SIZE)].x *= 2;
+				signal[p + (nl * SIGNAL_SIZE)].y *= 2;
 			}
 			else
 			{
-				signal[p + (nl * SIGNAL_SIZE)].x = 0.0; signal[p + (nl * SIGNAL_SIZE)].y = 0.0;
+				signal[p + (nl * SIGNAL_SIZE)].x = 0.0;
+				signal[p + (nl * SIGNAL_SIZE)].y = 0.0;
 			}
 		}
 	}
@@ -164,7 +168,7 @@ __global__ void find_maximum(double *array, double *max, int *mutex, unsigned in
 	unsigned int index = threadIdx.x + blockIdx.x*blockDim.x;
 	unsigned int stride = gridDim.x*blockDim.x;
 	unsigned int offset = 0;
-	__shared__ double cache[256];
+	__shared__ float cache[512];
 	double temp = -1.0;
 	while (index + offset < n)
 	{
